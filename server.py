@@ -53,15 +53,17 @@ class PuertaEntrada():
     def laserOn(self):
         self.laserOnSem.acquire()
         print('laser on')
+        
+        estacionamiento.sem.acquire()
         estacionamiento.lugaresDisponibles -= 1
         time.sleep(5)
-
         estacionamiento.sem.release()
+
         self.entrySem.release()
 
     def oprimeBoton(self):
         self.entrySem.acquire()
-        estacionamiento.sem.acquire()
+
         if estacionamiento.lugaresDisponibles > 0:
             print('imprime tarjeta')
             time.sleep(5)
@@ -102,22 +104,33 @@ class PuertaSalida():
         self.laserOffSem = threading.Semaphore(0)
         self.laserOnSem = threading.Semaphore(0)
 
-    def meteTarjeta(self):
+    def meteTarjeta(self, req):
         self.exitSem.acquire()
-        print('recoge tarjeta')
-        time.sleep(5)
-        self.estado = EstadosPuertaEntrada.BARRERA_ARRIBA
-        self.laserOffSem.release()
+        print('mete tarjeta')
+        if req.pago:
+            if req.timestamp - req.tiempoPago <= 15:
+                
+                print('pagado a tiempo')
+                time.sleep(5)
+                self.laserOffSem.release()
+            else:
+                print('pasaron más de 15 mins desde el pago')
+                self.exitSem.release()
+        else:
+            print("No pagaste")
+            self.exitSem.release
 
     def laserOff(self):
         self.laserOffSem.acquire()
-        print('laser off')
+        print('laser off salida')
         self.laserOnSem.release()
 
     def laserOn(self):
         self.laserOnSem.acquire()
-        print('laser on')
+        print('laser on salida')
+        
         estacionamiento.sem.acquire()
+
         estacionamiento.lugaresDisponibles += 1
         time.sleep(5)
 
@@ -130,13 +143,14 @@ class PuertaSalida():
 
             if req is None:
                 break
-
             assert (req.ident in comandosParaSalir)
 
-        #   comandoARealizar = self.funciones.get(req.ident)
-        #   comandoARealizar()
-            time.sleep(1)
-
+            if req.ident == "meteTarjeta":
+                self.meteTarjeta(req)
+            else:
+                comandoARealizar = self.funciones.get(req.ident)
+                comandoARealizar()
+            
             self.requestQueue.task_done
             time.sleep(1)
 
@@ -164,10 +178,15 @@ class Estacionamiento():
 
 
 class Peticion():
-    def __init__(self, timestamp, ident, puertaEntrada):
+    def __init__(self, timestamp, ident, puerta, detalle):
         self.ident = ident
         self.timestamp = timestamp
-        self.puertaEntrada = puertaEntrada
+        self.puerta = puerta
+        if len(detalle) == 2:
+            self.pago = True
+            self.tiempoPago = detalle[1]
+        else:
+            self.pago = False
 
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -201,13 +220,13 @@ try:
             dataStr = data.decode('utf-8')
             print('server received "%s"' % dataStr)
             dataArr = dataStr.split()
-            nuevaPeticion = Peticion(dataArr[0], dataArr[1], int(dataArr[2]))
+            nuevaPeticion = Peticion(dataArr[0], dataArr[1], int(dataArr[2]), dataArr[3:])
 
             if nuevaPeticion.ident in comandosParaEntrada:
-                puertasEntrada[nuevaPeticion.puertaEntrada -
+                puertasEntrada[nuevaPeticion.puerta -
                                1].requestQueue.put(nuevaPeticion)
             elif nuevaPeticion.ident in comandosParaSalir:
-                puertasSalida[nuevaPeticion.puertaEntrada -
+                puertasSalida[nuevaPeticion.puerta -
                               1].requestQueue.put(nuevaPeticion)
             elif nuevaPeticion.ident in comandosParaTerminar:
                 break
