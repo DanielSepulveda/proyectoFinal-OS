@@ -18,7 +18,7 @@ global estacionamiento
 class EstadosPuertaEntrada(Enum):
   IDLE = 'idle'
   TARJETA_IMPRESA = 'tarjetaImpresa'
-  BARRERA_ARRIVA = 'barreraArriva'
+  BARRERA_ARRIBA = 'barreraArriba'
   CARRO_PASANDO = 'carroPasando'
 
 class PuertaEntrada():
@@ -30,38 +30,55 @@ class PuertaEntrada():
       'laserOffE': self.laserOff,
       'laserOnE': self.laserOn
     }
+    self.laserOffSem = threading.Semaphore(0)
+    self.laserOnSem = threading.Semaphore(0)
+    self.recogeTarjetaSem = threading.Semaphore(0)
+    self.entrySem = threading.Semaphore(1)
     self.estado = EstadosPuertaEntrada.IDLE # Control de estado para evitar comandos invalidos
   
   def recogeTarjeta(self):
+    self.recogeTarjetaSem.acquire()
     if self.estado == EstadosPuertaEntrada.TARJETA_IMPRESA:
       print('recoge tarjeta')
       time.sleep(5)
-      self.estado = EstadosPuertaEntrada.BARRERA_ARRIVA
+      self.estado = EstadosPuertaEntrada.BARRERA_ARRIBA
+      self.laserOffSem.release()
 
   def laserOff(self):
-    if self.estado == EstadosPuertaEntrada.BARRERA_ARRIVA:
+    self.laserOffSem.acquire()
+    if self.estado == EstadosPuertaEntrada.BARRERA_ARRIBA:
       print('laser off')
       self.estado = EstadosPuertaEntrada.CARRO_PASANDO
+      self.laserOnSem.release()
   
   def laserOn(self):
+    self.laserOnSem.acquire()
     if self.estado == EstadosPuertaEntrada.CARRO_PASANDO:
       print('laser on')
+      estacionamiento.sem.acquire()
       estacionamiento.lugaresDisponibles -= 1
-      estacionamiento.sem.release()
       time.sleep(5)
+      
       self.estado = EstadosPuertaEntrada.IDLE
 
-  def oprimeBoton(self):
-    if self.estado == EstadosPuertaEntrada.IDLE:
-      estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
+      estacionamiento.sem.release()
+      self.entrySem.release()
+      
 
+  def oprimeBoton(self):
+    self.entrySem.acquire() # Bloquea por recurso compartido de lugares
+    if self.estado == EstadosPuertaEntrada.IDLE:
+      estacionamiento.sem.acquire()
       if estacionamiento.lugaresDisponibles > 0:
         print('imprime tarjeta')
         time.sleep(5)
         self.estado = EstadosPuertaEntrada.TARJETA_IMPRESA
+        estacionamiento.sem.release()
+        self.recogeTarjetaSem.release()
+
       else:
         print('No hay lugar, espera un poco y vuelve a oprimir el botón')
-        estacionamiento.sem.release()
+        self.entrySem.release()
 
   def run(self):
     while True:
@@ -104,7 +121,7 @@ class Estacionamiento():
     self.entradas = entradas
     self.salidas = salidas
     self.lugaresDisponibles = lugares
-    self.sem = threading.Semaphore()
+    self.sem = threading.Semaphore(1) # Semaphore used to avoid race condition on available places
 
     for i in range(numPuertasEntrada):
         puertasEntrada.append(PuertaEntrada())
