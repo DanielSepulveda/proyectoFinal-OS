@@ -78,11 +78,43 @@ class PuertaEntrada():
       self.requestQueue.task_done()
       time.sleep(1)
 
+class EstadosPuertaSalida(Enum):
+  IDLE = 'idle'
+  BARRERA_ARRIVA = 'barreraArriva'
+  CARRO_PASANDO = 'carroPasando'
+
 class PuertaSalida():
   def __init__(self):
     self.requestQueue = queue.Queue(100)
-    self.laserOff = threading.Semaphore(1)
-    self.laserOn = threading.Semaphore(1)
+    self.funciones = {
+      'meteTarjeta': self.meteTarjeta,
+      'laserOffS': self.laserOff,
+      'laserOnS': self.laserOn
+    }
+
+  def laserOn(self):
+    if self.estado == EstadosPuertaSalida.CARRO_PASANDO:
+      print('laser on')
+      estacionamiento.lugaresDisponibles += 1
+      estacionamiento.sem.release()
+      time.sleep(5)
+      self.estado = EstadosPuertaSalida.IDLE
+
+  def laserOff(self):
+    if self.estado == EstadosPuertaSalida.BARRERA_ARRIVA:
+      print('laser off')
+      self.estado = EstadosPuertaSalida.CARRO_PASANDO
+
+  def meteTarjeta(self, req):
+    if self.estado == EstadosPuertaSalida.IDLE:
+      estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
+
+      if estacionamiento.lugaresDisponibles < estacionamiento.lugares:
+        print('recibe tarjeta')
+        time.sleep(5)
+        self.estado = EstadosPuertaSalida.BARRERA_ARRIVA
+      else:
+        estacionamiento.sem.release()
 
   def run(self):
     while True:
@@ -93,9 +125,10 @@ class PuertaSalida():
 
       assert (req.ident in comandosParaSalir)
 
-      time.sleep(1)
+      comandoARealizar = self.funciones.get(req.ident)
+      comandoARealizar(req)
 
-      self.requestQueue.task_done
+      self.requestQueue.task_done()
       time.sleep(1)
 
 class Estacionamiento():
