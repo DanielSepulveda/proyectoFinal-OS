@@ -5,6 +5,7 @@ import threading
 import random
 import queue
 from enum import Enum
+from tabulate import tabulate
 
 comandosParaEntrada = ['oprimeBoton', 'recogeTarjeta', 'laserOffE', 'laserOnE']
 comandosParaSalir = ['meteTarjeta', 'laserOffS', 'laserOnS']
@@ -14,6 +15,9 @@ puertasEntrada = []
 puertasSalida = []
 threads = []
 global estacionamiento
+startTime = time.time()
+def getTimeStamp():
+  return time.time() - startTime
 
 class EstadosPuertaEntrada(Enum):
   IDLE = 'idle'
@@ -32,27 +36,31 @@ class PuertaEntrada():
     }
     self.estado = EstadosPuertaEntrada.IDLE # Control de estado para evitar comandos invalidos
   
-  def recogeTarjeta(self):
+  def recogeTarjeta(self, req):
     if self.estado == EstadosPuertaEntrada.TARJETA_IMPRESA:
+      estacionamiento.nuevoRegistro(req.comando)
       print('recoge tarjeta')
       time.sleep(5)
       self.estado = EstadosPuertaEntrada.BARRERA_ARRIVA
 
-  def laserOff(self):
+  def laserOff(self, req):
     if self.estado == EstadosPuertaEntrada.BARRERA_ARRIVA:
+      estacionamiento.nuevoRegistro(req.comando)
       print('laser off')
       self.estado = EstadosPuertaEntrada.CARRO_PASANDO
   
-  def laserOn(self):
+  def laserOn(self, req):
     if self.estado == EstadosPuertaEntrada.CARRO_PASANDO:
       print('laser on')
       estacionamiento.lugaresDisponibles -= 1
       estacionamiento.sem.release()
+      estacionamiento.nuevoRegistro(req.comando, '', True)
       time.sleep(5)
       self.estado = EstadosPuertaEntrada.IDLE
 
-  def oprimeBoton(self):
+  def oprimeBoton(self, req):
     if self.estado == EstadosPuertaEntrada.IDLE:
+      estacionamiento.nuevoRegistro(req.comando)
       estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
 
       if estacionamiento.lugaresDisponibles > 0:
@@ -73,7 +81,7 @@ class PuertaEntrada():
       assert (req.ident in comandosParaEntrada)
 
       comandoARealizar = self.funciones.get(req.ident)
-      comandoARealizar()
+      comandoARealizar(req)
 
       self.requestQueue.task_done()
       time.sleep(1)
@@ -91,22 +99,26 @@ class PuertaSalida():
       'laserOffS': self.laserOff,
       'laserOnS': self.laserOn
     }
+    self.estado = EstadosPuertaSalida.IDLE
 
-  def laserOn(self):
+  def laserOn(self, req):
     if self.estado == EstadosPuertaSalida.CARRO_PASANDO:
       print('laser on')
       estacionamiento.lugaresDisponibles += 1
       estacionamiento.sem.release()
+      estacionamiento.nuevoRegistro(req.comando, '', True)
       time.sleep(5)
       self.estado = EstadosPuertaSalida.IDLE
 
-  def laserOff(self):
+  def laserOff(self, req):
     if self.estado == EstadosPuertaSalida.BARRERA_ARRIVA:
+      estacionamiento.nuevoRegistro(req.comando)
       print('laser off')
       self.estado = EstadosPuertaSalida.CARRO_PASANDO
 
   def meteTarjeta(self, req):
     if self.estado == EstadosPuertaSalida.IDLE:
+      estacionamiento.nuevoRegistro(req.comando)
       estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
 
       if estacionamiento.lugaresDisponibles < estacionamiento.lugares:
@@ -138,6 +150,7 @@ class Estacionamiento():
     self.salidas = salidas
     self.lugaresDisponibles = lugares
     self.sem = threading.Semaphore()
+    self.registros = []
 
     for i in range(numPuertasEntrada):
         puertasEntrada.append(PuertaEntrada())
@@ -150,12 +163,22 @@ class Estacionamiento():
         t = threading.Thread(target=puertasSalida[i].run)
         t.start()
         threads.append(t)
+  
+  def nuevoRegistro(self, comando, mensaje = '', conLugares = False):
+    nR = [getTimeStamp(), comando, mensaje]
+    if conLugares:
+      nR.append(self.lugaresDisponibles)
+      nR.append(self.lugares - self.lugaresDisponibles)
+    self.registros.append(nR)
 
 class Peticion():
-  def __init__(self, timestamp, ident, puertaEntrada):
-    self.ident = ident
-    self.timestamp = timestamp
-    self.puertaEntrada = puertaEntrada
+  def __init__(self, comando):
+    self.comando = comando
+    comandoArr = comando.split()
+    self.comandoArr = comandoArr
+    self.ident = comandoArr[1]
+    if not self.ident in comandosParaTerminar:
+      self.puerta = int(comandoArr[2])
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -180,24 +203,45 @@ try:
   numPuertasSalida = int(initDataArr[4])
 
   estacionamiento = Estacionamiento(lugares, numPuertasEntrada, numPuertasSalida)
+  estacionamiento.nuevoRegistro(initDataStr, f'Se abre un estacionamiento de {lugares}, {numPuertasEntrada} puertas de entrada y {numPuertasSalida} de salida', True)
 
   while True:
     data = connection.recv(256)
     if data:
       dataStr = data.decode('utf-8')
       print ( 'server received "%s"' % dataStr)
-      dataArr = dataStr.split()
-      nuevaPeticion = Peticion(dataArr[0], dataArr[1], int(dataArr[2]))
+      nuevaPeticion = Peticion(dataStr)
 
       if nuevaPeticion.ident in comandosParaEntrada:
-        puertasEntrada[nuevaPeticion.puertaEntrada - 1].requestQueue.put(nuevaPeticion)
+        puertasEntrada[nuevaPeticion.puerta - 1].requestQueue.put(nuevaPeticion)
       elif nuevaPeticion.ident in comandosParaSalir:
-        puertasSalida[nuevaPeticion.puertaEntrada - 1].requestQueue.put(nuevaPeticion)
+        puertasSalida[nuevaPeticion.puerta - 1].requestQueue.put(nuevaPeticion)
       elif nuevaPeticion.ident in comandosParaTerminar:
         break
     else:
       print ( 'no data from', client_address)
       connection.close()
       sys.exit()
+except:
+  print("Unexpected error:", sys.exc_info()[0])
+  raise
 finally:
+  print('finally')
   connection.close()
+
+  for i in range(estacionamiento.entradas):
+    puertasEntrada[i].requestQueue.join()
+    puertasEntrada[i].requestQueue.put(None)
+
+  for i in range(estacionamiento.salidas):
+    puertasSalida[i].requestQueue.join()
+    puertasSalida[i].requestQueue.put(None)
+
+  for t in threads:
+    t.join()
+  
+  estacionamiento.nuevoRegistro(nuevaPeticion.comando)
+
+  print(tabulate(estacionamiento.registros, headers=['Timestamp', 'Comando', 'El servidor despliega', 'Libres', 'Ocupados'], tablefmt="psql"))
+  
+  sys.exit()
