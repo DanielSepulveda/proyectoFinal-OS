@@ -34,6 +34,7 @@ class PuertaEntrada():
       'laserOffE': self.laserOff,
       'laserOnE': self.laserOn
     }
+    self.entrySem = threading.Semaphore(1) 
     self.estado = EstadosPuertaEntrada.IDLE # Control de estado para evitar comandos invalidos
   
   def recogeTarjeta(self, req):
@@ -46,7 +47,7 @@ class PuertaEntrada():
       self.estado = EstadosPuertaEntrada.BARRERA_ARRIVA
 
   def laserOff(self, req):
-    if self.estado == EstadosPuertaEntrada.BARRERA_ARRIVA:
+   if self.estado == EstadosPuertaEntrada.BARRERA_ARRIVA:
       estacionamiento.nuevoRegistro(req.comando)
       print('laser off')
       estacionamiento.nuevoRegistro(mensaje=f"Auto comienza a pasar por E{req.puerta}")
@@ -55,29 +56,30 @@ class PuertaEntrada():
   def laserOn(self, req):
     if self.estado == EstadosPuertaEntrada.CARRO_PASANDO:
       print('laser on')
+
+      estacionamiento.sem.acquire() 
       estacionamiento.lugaresDisponibles -= 1
       estacionamiento.sem.release()
-      estacionamiento.nuevoRegistro(req.comando)
+
+      estacionamiento.nuevoRegistro(req.comando, '', True)
       estacionamiento.nuevoRegistro(mensaje=f'Auto termina de pasar por E{req.puerta}')
       time.sleep(5)
       estacionamiento.nuevoRegistro(mensaje=f'Se bajó la barrera E{req.puerta}')
       self.estado = EstadosPuertaEntrada.IDLE
+      estacionamiento.semLugaresOcupados.release()
+      self.entrySem.release()
 
   def oprimeBoton(self, req):
-    if self.estado == EstadosPuertaEntrada.IDLE:
       estacionamiento.nuevoRegistro(req.comando)
-      estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
 
-      if estacionamiento.lugaresDisponibles > 0:
-        estacionamiento.nuevoRegistro(mensaje=f"Se comienza a imprimir tarjeta por E{req.puerta}")
-        print('imprime tarjeta')
-        time.sleep(5)
-        estacionamiento.nuevoRegistro(mensaje=f"Se imprimió tarjeta en E{req.puerta}")
-        self.estado = EstadosPuertaEntrada.TARJETA_IMPRESA
-      else:
-        print('No hay lugar, espera un poco y vuelve a oprimir el botón')
-        estacionamiento.nuevoRegistro(mensaje=f"Se rechazó la entrada al estacionamiento por E{req.puerta}")
-        estacionamiento.sem.release()
+      estacionamiento.semLugaresDisponibles.acquire()
+      self.entrySem.acquire()
+      
+      estacionamiento.nuevoRegistro(mensaje=f"Se comienza a imprimir tarjeta por E{req.puerta}")
+      print('imprime tarjeta')
+      time.sleep(5)
+      estacionamiento.nuevoRegistro(mensaje=f"Se imprimió tarjeta en E{req.puerta}")
+      self.estado = EstadosPuertaEntrada.TARJETA_IMPRESA
 
   def run(self):
     while True:
@@ -107,34 +109,40 @@ class PuertaSalida():
       'laserOffS': self.laserOff,
       'laserOnS': self.laserOn
     }
+    self.exitSem = threading.Semaphore(1)
     self.estado = EstadosPuertaSalida.IDLE
 
   def laserOn(self, req):
     if self.estado == EstadosPuertaSalida.CARRO_PASANDO:
       print('laser on')
+      estacionamiento.sem.acquire()
       estacionamiento.lugaresDisponibles += 1
       estacionamiento.sem.release()
       estacionamiento.nuevoRegistro(req.comando, '', True)
+      estacionamiento.nuevoRegistro(mensaje=f"Auto termina de pasar por S{req.puerta}")
       time.sleep(5)
+      estacionamiento.nuevoRegistro(mensaje=f"Se bajó la barrera de S{req.puerta}")
       self.estado = EstadosPuertaSalida.IDLE
+      self.exitSem.release()
+      estacionamiento.semLugaresDisponibles.release()
 
   def laserOff(self, req):
     if self.estado == EstadosPuertaSalida.BARRERA_ARRIVA:
       estacionamiento.nuevoRegistro(req.comando)
       print('laser off')
+      estacionamiento.nuevoRegistro(mensaje=f"Auto comienza a pasar por S{req.puerta}") 
       self.estado = EstadosPuertaSalida.CARRO_PASANDO
 
   def meteTarjeta(self, req):
-    estacionamiento.sem.acquire() # Bloquea por recurso compartido de lugares
-    if self.estado == EstadosPuertaSalida.IDLE:
+      estacionamiento.semLugaresOcupados.acquire()
+      self.exitSem.acquire()
       estacionamiento.nuevoRegistro(req.comando)
-
-      if estacionamiento.lugaresDisponibles < estacionamiento.lugares:
-        print('recibe tarjeta')
-        time.sleep(5)
-        self.estado = EstadosPuertaSalida.BARRERA_ARRIVA
-      else:
-        estacionamiento.sem.release()
+      estacionamiento.nuevoRegistro(mensaje=f"Recibe tarjeta en S{req.puerta}") 
+      estacionamiento.nuevoRegistro(mensaje=f"Se comienza a levantar la barrera por S{req.puerta}") 
+      print('recibe tarjeta')
+      time.sleep(5)
+      estacionamiento.nuevoRegistro(mensaje=f"Se levanta la barrera de S{req.puerta}") 
+      self.estado = EstadosPuertaSalida.BARRERA_ARRIVA
 
   def run(self):
     while True:
